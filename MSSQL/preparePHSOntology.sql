@@ -9,7 +9,7 @@
 --------------------------------------------------------------------------------------------
 -- When to run....
 -- After preparePCORnetOntology.sql 
---	   Run the new preparePCORnetOntology.sql
+--	   Run the new preparePHSOntology.sql
 -- Run after import of a new i2b2metadata ontology table.
 --     This is done with each delivery of a new data mart.
 --------------------------------------------------------------------------------------------

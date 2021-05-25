@@ -13,9 +13,9 @@
 --          a) Review the default values set by OMOPConfig_setup.sql and update or modify them as needed for your environment.
 -- 3. If you have new PCORNET Ontology run .... preparePCORnetOntology.sql
 -- 4. If you have a new i2b2 Ontology (i2b2metadata) run .... preparePHSOntology.sql
--- 3. Run this script to set up the loader
+-- 5. Run this script to set up the loader
 --          a) Use your OMOP db and make sure it has privileges to read from the various locations that the synonyms point to.
--- 4. Use the included run_*.sql script to execute the procedure, or run manually via "exec OMOPLoader <number>" (will transform at most <number> patients)
+-- 6. Use the included run_*.sql script to execute the procedure, or run manually via "exec OMOPLoader <number>" (will transform at most <number> patients)
 -- NOTES: After any new i2b2 Ontology run the following....
 --         1) preparePHSOntology.sql
 --         2) Stored procedure OMOPBuildMapping
@@ -1374,7 +1374,18 @@ GO
 IF  EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'OMOPdrug_exposure') AND type in (N'P', N'PC')) DROP PROCEDURE OMOPdrug_exposure;
 GO
 create procedure OMOPdrug_exposure as
+--------------------------------------------------------------------
+-- DESCRIPTION: Inserts observation_facts that have RxNorm or NDC codes into measurment table as defined in the PCORNET_MED ontology
+-- Parameters: None
+-- Notes: None
+--------------------------------------------------------------------
+
+DECLARE @START_TIME DATETIME;
+DECLARE @END_TIME DATETIME;
+
 begin
+
+SET @START_TIME = GETDATE();
 
 -- Griffin's optimization: use temp tables rather than left joining directly - 12/9/15
     select pcori_basecode,c_fullname,instance_num,start_date,basis.provider_id,concept_cd,encounter_num,modifier_cd
@@ -1399,7 +1410,7 @@ begin
 			--inner join visit_occurrence enc on enc.person_id = quantity.patient_num and enc.visit_occurrence_id = quantity.encounter_Num
 		 join pcornet_med quantitycode 
 			on quantity.modifier_cd = quantitycode.c_basecode
-			and quantitycode.c_fullname like '\PCORI_MOD\RX_QUANTITY\'
+			and quantitycode.c_fullname like '\PCORI_MOD\RX_QUANTITY\%'
 
 	select nval_num,instance_num,start_date,refills.provider_id,concept_cd,encounter_num,modifier_cd 
 		into #refills
@@ -1407,7 +1418,7 @@ begin
 			--inner join visit_occurrence enc on enc.person_id = refills.patient_num and enc.visit_occurrence_id = refills.encounter_Num
 		 join pcornet_med refillscode 
 			on refills.modifier_cd = refillscode.c_basecode
-			and refillscode.c_fullname like '\PCORI_MOD\RX_REFILLS\'
+			and refillscode.c_fullname like '\PCORI_MOD\RX_REFILLS\%'
 
     select nval_num,instance_num,start_date,supply.provider_id,concept_cd,encounter_num,modifier_cd 
 		into #supply
@@ -1415,7 +1426,12 @@ begin
 			--inner join visit_occurrence enc on enc.person_id = supply.patient_num and enc.visit_occurrence_id = supply.encounter_Num
 		 join pcornet_med supplycode 
 			on supply.modifier_cd = supplycode.c_basecode
-			and supplycode.c_fullname like '\PCORI_MOD\RX_DAYS_SUPPLY\'
+			and supplycode.c_fullname like '\PCORI_MOD\RX_DAYS_SUPPLY\%'
+
+    select tval_char,instance_num,start_date,provider_id,concept_cd,encounter_num,modifier_cd
+		into #route
+		from i2b2fact route
+		where modifier_cd = 'MED:ROUTE'
 
 -- insert data with outer joins to ensure all records are included even if some data elements are missing
 insert into drug_exposure(
@@ -1432,7 +1448,7 @@ person_id   -----------------------> patient_num unique identifier for the patie
 , quantity	--------------------------> from ontology \PCORI_MOD\RX_QUANTITY ----------------> Done
 , days_supply	--------------------------> from ontology \PCORI_MOD\RX_DAYS_SUPPLY ----------> Done
 , sig----------------------------> The directions "signetur" on the Drug prescription as recorded in the original prescription or dispensing record -- Passing the frequency---> Done
-, route_concept_id ---------------> routes of administrating medication oral, intravenous, etc... Need a mapping ---------------------------> NOT DONE
+, route_concept_id ---------------> routes of administrating medication oral, intravenous, etc... Added route mapping for MED:ROUTE values. ---> DONE
 -- NOT IN 5.2 -- , effective_drug_dose ------------> Numerical Value of Drug dose for this Drug_Exposure... Do we have this? --> No 
 -- NOT IN 5.2 -- , dose_unit_concept_id -----------> UCUM Codes concpet c where c.vocabulary_id = 'UCUM and c.standard_concept='S' and c.domain_id='Unit'----> NOT DONE
 , lot_number ----------------------> varchar... do we have this value?------------------------> No
@@ -1440,18 +1456,27 @@ person_id   -----------------------> patient_num unique identifier for the patie
 , visit_occurrence_id -----------------> observation_fact.encounter_num i2b2 id for the encounter (visit)-> Done
 , drug_source_value ----------> PCORI base code from ontology preffered vocabularies RxNorm, NDC, CVX, or the name, do we have this? ---> Use the base_code which NDC or RXNorm ---> Done
 , drug_source_concept_id ----> OMOP source code from ontology  do we have this mapping?-------> NOT DONE
-, route_source_value ----------> Varchar ....Do we have this?-------yes-----------------------> NOT DONE
+, route_source_value ----------> Varchar ....Do we have this?-------yes-----------------------> Pulling values from MED:ROUTE modifiers
 , dose_unit_source_value ----------> Varchar .....Do we have this?--yes-----------------------> NOT DONE
 )
-select distinct m.patient_num, isnull(isnull(omap.concept_id,omap.source_id),0) , m.start_date, cast(m.start_Date as datetime), isnull(m.end_date,m.start_date), cast(isnull(m.end_date,m.start_date) as datetime),
+select distinct m.patient_num
+, isnull(isnull(omap.concept_id,omap.source_id),0) 
+, m.start_date
+, cast(m.start_Date as datetime)
+, isnull(m.end_date,m.start_date)
+, cast(isnull(m.end_date,m.start_date) as datetime),
  case 
    when basis.c_fullname is null or basis.c_fullname like '\PCORI_MOD\RX_BASIS\PR\%' then '38000177'
    when basis.c_fullname like '\PCORI_MOD\RX_BASIS\DI\%' then '38000175'
  end
 , null
-, refills.nval_num refills, quantity.nval_num quantity, supply.nval_num supply, substring(freq.pcori_basecode,charindex(':',freq.pcori_basecode)+1,2) frequency
-, null, null
-, provider.provider_id, m.Encounter_num, mo.C_BASECODE, null, null, units_cd
+, refills.nval_num refills
+, quantity.nval_num quantity
+, supply.nval_num supply
+, substring(freq.pcori_basecode,charindex(':',freq.pcori_basecode)+1,2) frequency
+, local.standard_concept_id
+, null
+, provider.provider_id, m.Encounter_num, mo.C_BASECODE, null, local.local_concept_name, units_cd
  from i2b2fact m
  inner join pcornet_med mo on m.concept_cd = mo.c_basecode 
  inner join visit_occurrence enc on enc.person_id = m.patient_num and enc.visit_occurrence_id = m.encounter_Num 
@@ -1459,6 +1484,14 @@ select distinct m.patient_num, isnull(isnull(omap.concept_id,omap.source_id),0) 
  left join i2o_mapping omap on mo.i_stdcode=omap.source_code and omap.domain_id='Drug'
 
 -- TODO: This join adds several minutes to the load - must be debugged
+
+	left join #route route
+    on m.encounter_num = route.encounter_num
+    and m.concept_cd = route.concept_Cd
+    and m.start_date = route.start_date
+    and m.provider_id = route.provider_id
+    and m.instance_num = route.instance_num
+	left join local_concept_map local on route.tval_char = local.local_concept_name
 
     left join #basis basis
     on m.encounter_num = basis.encounter_num
@@ -1499,6 +1532,8 @@ select distinct m.patient_num, isnull(isnull(omap.concept_id,omap.source_id),0) 
 
      where mo.i_stdcode is not null
 
+	 SET @END_TIME = GETDATE();
+	PRINT 'OMOPDRUG_EXPOSURE EXECUTION TIME: ' +  CAST(datediff(s, @start_time, @end_time) as nvarchar(50));
 end
 GO
 
