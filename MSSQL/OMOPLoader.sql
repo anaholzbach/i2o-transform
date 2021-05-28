@@ -1807,7 +1807,8 @@ GO
 
 IF  EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'OMOPmeasurementLab') AND type in (N'P', N'PC')) DROP PROCEDURE OMOPmeasurementLab;
 GO
-create procedure [OMOPmeasurementLab] as
+
+create procedure [dbo].[OMOPmeasurementLab] as
 --------------------------------------------------------------------
 -- DESCRIPTION: Inserts observation_facts that have loinc codes into measurment table
 -- Parameters: None
@@ -1847,11 +1848,18 @@ M.encounter_num visit_occurrence_id,
 isnull(lab.i_stdcode, '') measurement_source_value,
 Cast(m.start_date as DATE) measurement_date,   
 cast(m.start_Date as datetime) measurement_datetime,
--- NOTE: Are these concept_ids the ones analysts want?
-CASE isnull(m.VALUEFLAG_CD,'0') WHEN 'H' THEN '45876384' WHEN 'L' THEN '45881666' WHEN 'A' THEN '45878745' WHEN 'N' THEN '45884153' ELSE '0' END value_as_concept_id,
+--Sets value as concept in following order
+--     TVal matches concept name straight up
+--     TVal matches local concept map
+--     NVal for 3 covid antibody/antigens are low < 1
+--     NVal for 3 covid antibody/antigens are hight > 1
+case when m.valtype_cd = 'T' then 
+	isnull(concept.concept_id, local_concept_map.standard_concept_id) 
+	when (m.valtype_cd = 'N' and omap.concept_id in ('706178', '706177', '586522') and m.NVAL_NUM <= 1.0) then '45880296'
+	when (m.valtype_cd = 'N' and omap.concept_id in ('706178', '706177', '586522') and m.NVAL_NUM > 1.0) then '45877985'
+	else null end value_as_concept_id,
 CASE WHEN m.ValType_Cd='N' THEN m.NVAL_NUM ELSE null END value_as_number,
--- NOTE: lab.i_unit is a unit extracted from the i2b2 ontology c_metadataxml field) set per ontology entry/LOINC Code
--- NOTE: m.units_cd is directly from the observation_fact table set per observation
+-- NOTE: Units are pulled from PHS Ontology first (extracted from XML) , if not present then it falls back to units_cd on the observation fact
 isnull(isnull(lab.i_unit, m.Units_CD),'') unit_source_value, 
 
 -- TODO: Need to get normal ranges working again
@@ -1860,8 +1868,7 @@ isnull(isnull(lab.i_unit, m.Units_CD),'') unit_source_value,
 null range_low, null range_high,
 
 CASE WHEN m.ValType_Cd='T' THEN substring(m.TVal_Char,1,50) ELSE substring(cast(m.NVal_Num as varchar),1,50) END value_source_value,
--- NOTE: u2.concept_id is an OMOP standard concept id mapped to a unit extracted from the i2b2 ontology c_metadataxml field) set per ontology entry/LOINC Code
--- NOTE: u.concept_id is an OMOP standard concept id mapped to a unit directly from the observation_fact table set per observation
+-- NOTE: Units are pulled from PHS Ontology first (extracted from XML) , if not present then it falls back to units_cd on the observation fact
 isnull(isnull(u2.concept_id, u.concept_id), '0') unit_concept_id, 
 isnull(omap.concept_id, '0') measurement_concept_id, 
 isnull(omap.source_id, '0') measurement_source_concept_id, 
@@ -1870,34 +1877,15 @@ isnull(omap.source_id, '0') measurement_source_concept_id,
 , '0'
 
 FROM i2b2fact M  
-<<<<<<< HEAD
 inner join visit_occurrence enc on enc.person_id = m.patient_num and enc.visit_occurrence_id = m.encounter_Num -- Constraint to selected encounters
-<<<<<<< HEAD
-<<<<<<< HEAD
-inner join (select distinct i_stdcode,c_basecode from i2o_ontology_lab where i_stddomain='LOINC') lab on lab.c_basecode  = M.concept_cd
-=======
-=======
->>>>>>> 91942b2 (Commented out the modifiers as they are currently not used for any data at the moment. May bring them back in.)
-inner join (select * from (
-				select c_basecode
-					, i_stdcode
-					, i_unit
-					, i_date_of_xml_creation
-					, row_number() over (partition by c_basecode order by i_date_of_xml_creation desc) as rnk
-				from i2o_ontology_lab
-				where i_stddomain='LOINC'
-				and i_stdcode is not null
-				and i_stdcode != '') x 
-			where x.rnk = 1) lab on lab.c_basecode  = M.concept_cd
->>>>>>> a65f218 (Added a file of upserts for unit mappings)
-=======
 inner join (select distinct i_stdcode,c_basecode, i_unit from i2o_ontology_lab where i_stddomain='LOINC') lab on lab.c_basecode  = M.concept_cd
->>>>>>> 28aabf15718a2b6844cde5832ba02fb7d22d92ff
 inner join i2o_mapping omap on lab.i_stdcode=omap.source_code and omap.domain_id='Measurement'
 -- NOTE: Both m.units_cd (original observation fact unit value) and m.i_unit (extract unit value from PHS XML) are mapped to UCUM standard concepts
 left outer join i2o_unitsmap u on u.units_name=m.units_cd
 left outer join i2o_unitsmap u2 on u2.units_name=lab.i_unit
 left outer join provider on m.provider_id = provider.provider_source_value --provider support
+left outer join local_concept_map on m.tval_char = local_concept_map.local_concept_name and local_concept_map.standard_vocabulary_id = 'LOINC'
+left outer join concept on m.tval_char = concept.concept_name and concept.domain_id = 'Meas Value' and concept.standard_concept = 'S' and concept.vocabulary_id = 'LOINC'
 
 
 --LEFT OUTER JOIN
@@ -1919,7 +1907,6 @@ left outer join provider on m.provider_id = provider.provider_source_value --pro
 --and M.instance_num = l.instance_num
  
 WHERE  m.MODIFIER_CD='@';
-
 
 SET @END_TIME = GETDATE();
 PRINT 'OMOPMEASUREMENT_LAB EXECUTION TIME: ' +  CAST(datediff(s, @start_time, @end_time) as nvarchar(50));
