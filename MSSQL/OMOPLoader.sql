@@ -978,6 +978,10 @@ select distinct v.patient_num, v.encounter_num,
 	ISNULL(convert(date, end_date), ISNULL((select convert(date, max(f.start_date)) from i2b2fact f where f.encounter_num = v.encounter_num group by f.encounter_num), convert(date, start_date))) end_Date, 
 	ISNULL(end_date, ISNULL((select max(f.start_date) from i2b2fact f where f.encounter_num = v.encounter_num group by f.encounter_num), start_date)) end_datetime,  
 	provider.provider_id, --insert provider id instead of '0.'
+	-- =================================================================
+	-- Changed by Ana Holzbach, 03/27/2024
+	-- Code for LAB type visits based on visit_dimension.sourcesystem_cd
+	-- ================================================================= 
 --(case when e.omop_basecode is not null then e.omop_basecode else '0' end) enc_type, 
   (case 
 			when (e.omop_basecode is not null and e.OMOP_BASECODE <> '') then e.omop_basecode 
