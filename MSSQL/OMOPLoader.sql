@@ -999,6 +999,116 @@ left outer join care_site care on v.location_cd = care.place_of_service_source_v
 end
 go
 
+----------------------------------------------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------------------------------------------
+-- Encounter Secondary - by Ana Holzbach
+-- visit_occurrence records from observation_fact
+----------------------------------------------------------------------------------------------------------------------------------------
+IF  EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'OMOPencounter_secondary') AND type in (N'P', N'PC'))
+DROP PROCEDURE OMOPencounter_secondary
+GO
+
+create procedure OMOPencounter_secondary 
+	
+AS
+BEGIN
+
+	SET NOCOUNT ON;
+---------------------------------------------------------------------------
+--- 1. 
+--- insert non-standard Observation codes that map to standard Visit codes
+--- as visits in temp table #visit_sec
+---------------------------------------------------------------------------
+select distinct
+	visit.patient_num as person_id,
+	visit.ENCOUNTER_NUM as visit_occurrence_id,
+	convert(date, visit.start_date) as visit_start_date, 
+	start_date as visit_start_datetime, 
+	ISNULL(convert(date, end_date), ISNULL((select convert(date, max(f.start_date)) from i2b2fact f where f.encounter_num = visit.encounter_num group by f.encounter_num), convert(date, start_date))) as visit_end_date, 
+	ISNULL(end_date, ISNULL((select max(f.start_date) from i2b2fact f where f.encounter_num = visit.encounter_num group by f.encounter_num), start_date)) as visit_end_datetime,  
+	p.provider_id,
+	st.concept_id as visit_concept_id,
+	care.care_site_id, -- in encounter proc: join between visit_dimension.location_cd and care_site works better
+	'44818518' as visit_type_concept_id,
+	null as visit_source_value -- in encounter proc: i2b2 visit_dimension.inout_cd -- join this with visit_dimension?
+
+	into #visit_sec
+
+from i2b2fact visit
+inner join visit_occurrence enc on enc.person_id = visit.patient_num and enc.visit_occurrence_id = visit.encounter_num -- Constraint to selected encounters
+inner join concept_map_px_obs prc on prc.c_basecode = visit.concept_cd
+left outer join provider p on visit.provider_id = p.provider_source_value
+left outer join concept nst on prc.concept_id = nst.concept_id and (nst.standard_concept <> 'S' or nst.standard_concept is null or nst.domain_id <> 'Observation') 
+join concept_relationship cr on nst.concept_id = cr.concept_id_1 
+join concept st on st.concept_id = cr.concept_id_2
+left outer join care_site care on visit.location_cd = care.place_of_service_source_value
+where cr.relationship_id = 'Maps To' and st.standard_concept = 'S' and st.domain_id = 'Visit'
+    
+--------------------------------------------------------------------------------------------------------------------
+--- 2. 
+--- for each record in #visit_sec with a matching visit_occurrence_id & person_id, and different concept_id:
+---			- if old concept_id is 0 and new is not, update record in visit_occurrence with new value
+---			  else
+---				- if old and new concepts are both in (9201, 9202, 9203) === WHAT TO DO WITH THESE?
+---				- if either old or new are not 9s, insert a new record in visit_detail
+-------------------------------------------------------------------------------------------------------------------
+declare @visit_id as int;
+declare @person_id as int;
+declare @new_code as int;
+declare @old_code as int;
+declare @recs as cursor;
+
+set @recs = cursor for
+	select st.visit_occurrence_id, st.person_id, st.visit_concept_id as new, v.visit_concept_id as old
+	from #visit_sec st
+	join visit_occurrence v
+	on st.person_id = v.person_id and st.visit_occurrence_id = v.visit_occurrence_id
+	where st.visit_concept_id <> v.visit_concept_id
+
+open @recs
+fetch next from @recs into @visit_id, @person_id, @new_code, @old_code
+
+while @@FETCH_STATUS = 0
+begin 
+	
+	if @old_code = '0'
+		update visit_occurrence set visit_concept_id = @new_code where visit_occurrence_id = @visit_id and person_id = @person_id;
+
+	else if @old_code not like '9%' or @new_code not like '9%' 
+
+				insert into visit_detail (
+										  visit_detail_concept_id,
+										  visit_detail_start_date,
+										  visit_detail_start_datetime,
+										  visit_detail_end_date,
+										  visit_detail_end_datetime,
+										  visit_detail_type_concept_id,
+										  provider_id,
+										  care_site_id, 
+										  visit_occurrence_id,
+										  person_id
+										  )
+					select @new_code, 
+						   voc.visit_start_date, 
+						   voc.visit_start_datetime, 
+						   voc.visit_end_date, 
+						   voc.visit_end_datetime,
+						   voc.visit_type_concept_id,
+						   voc.provider_id,
+						   voc.care_site_id,
+						   @visit_id,
+						   @person_id
+					from visit_occurrence voc
+						  where visit_occurrence_id = @visit_id and person_id = @person_id;
+
+	fetch next from @recs into @visit_id, @person_id, @new_code, @old_code
+end
+
+close @recs;
+deallocate @recs;
+
+END
+go
 
 ----------------------------------------------------------------------------------------------------------------------------------------
 ----------------------------------------------------------------------------------------------------------------------------------------
@@ -1161,12 +1271,39 @@ begin
 
 -- Update observation table ---
 -- When mapped domain is not present, use unmapped code if it is CPT4, ICD-10, or HCPCS - these that do not have mappings are standard codes
-insert into observation with(tablock) (person_id,observation_concept_id,observation_date, observation_datetime, observation_type_concept_id,provider_id,observation_source_value,observation_source_concept_id,visit_occurrence_id)
-select  distinct fact.patient_num, case prc.mapped_domain when 'Observation' then prc.mapped_id else '0' END, fact.start_date, fact.start_date, 38000280 -- observation recorded from EHR
-  , isnull(p.provider_id, enc.provider_id), prc.PCORI_BASECODE, prc.concept_id, fact.encounter_num from i2b2fact fact
+-- =============================================================================
+-- Changed by: Ana Holzbach, 02/23/2024
+-- Join with concept table to find only standard concepts
+-- =============================================================================
+insert into observation with(tablock) 
+	(person_id,
+	 observation_concept_id,
+	 observation_date, 
+	 observation_datetime, 
+	 observation_type_concept_id,
+	 provider_id,
+	 observation_source_value,
+	 observation_source_concept_id,
+	 visit_occurrence_id)
+select distinct 
+	fact.patient_num, 
+	case prc.mapped_domain 
+		when 'Observation' then prc.mapped_id 
+		else '0' 
+	end, 
+	fact.start_date, 
+	fact.start_date, 
+	38000280, -- observation recorded from EHR
+	isnull(p.provider_id, enc.provider_id), 
+	prc.PCORI_BASECODE, 
+	prc.concept_id, 
+	fact.encounter_num 
+from i2b2fact fact
 inner join visit_occurrence enc on enc.person_id = fact.patient_num and enc.visit_occurrence_id = fact.encounter_Num -- Constraint to selected encounters
 inner join concept_map_px_obs prc on prc.c_basecode = fact.concept_cd
 left outer join provider p on fact.provider_id = p.provider_source_value 
+left outer join concept on prc.concept_id = concept.concept_id
+where concept.standard_concept = 'S';
 
 -- Next, update measurement table ---
 -- Millions of records (7k codes) get thrown into here - measurements like PTT that we have no value for
