@@ -2170,6 +2170,9 @@ RAISERROR('OMOPcare_site %s', 0, 1,@FLAG) WITH NOWAIT;
 exec OMOPencounter
 set @FLAG=cast(getdate() as varchar(30))
 RAISERROR('OMOPencounter %s', 0, 1,@FLAG) WITH NOWAIT;
+exec OMOPencounter_secondary
+set @FLAG=cast(getdate() as varchar(30))
+RAISERROR('OMOPencounter_secondary %s', 0, 1,@FLAG) WITH NOWAIT;
 exec OMOPobservationperiod
 set @FLAG=cast(getdate() as varchar(30))
 RAISERROR('OMOPobservationperiod %s', 0, 1,@FLAG) WITH NOWAIT;
