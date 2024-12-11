@@ -2096,6 +2096,7 @@ TRUNCATE TABLE drug_exposure
 TRUNCATE TABLE measurement
 TRUNCATE TABLE procedure_occurrence
 DELETE FROM visit_occurrence -- Truncate cannot work with FPK constraints
+DELETE FROM visit_detail
 DELETE FROM person -- Truncate cannot work with FPK constraints
 DELETE FROM provider -- Truncate cannot work with FPK constraints
 DELETE FROM location -- Truncate cannot work with FPK constraints
