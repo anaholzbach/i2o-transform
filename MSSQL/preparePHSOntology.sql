@@ -26,7 +26,7 @@ ALTER TABLE [dbo].[i2b2metadata]
 	[i_stddomain] varchar(100) NULL,
 	[i_unit] varchar(100) NULL,
 	[i_date_of_xml_creation] date
-GO
+--GO
 CREATE NONCLUSTERED INDEX [i2b2meta_stdcode]
 	ON [dbo].[i2b2metadata]([i_stdcode])
 GO
@@ -73,11 +73,22 @@ GO
 update m set i_stddomain='LOINC'
       ,i_stdcode=try_cast(m.c_metadataxml as xml).value('(/ValueMetadata/Loinc)[1]','VARCHAR(50)')
 	  , i_unit = try_cast(m.c_metadataxml as xml).value('(/ValueMetadata/UnitValues/NormalUnits)[1]','VARCHAR(25)')
-	  , i_date_of_xml_creation = try_cast(m.c_metadataxml as xml).value('(/ValueMetadata/CreationDateTime)[1]','DateTime')
-	  from i2b2metadata m 
- where m.C_FULLNAME like '%\I2B2MetaData\LabTests\%'
- and m.c_metadataxml is not null
- and m.c_metadataxml != ''
+	  , i_date_of_xml_creation =
+        TRY_CONVERT(
+            datetime2,
+            CONCAT(
+                SUBSTRING(dt, 7, 4), '-',   -- YYYY
+                SUBSTRING(dt, 1, 2), '-',   -- MM
+                SUBSTRING(dt, 4, 2), ' ',
+                SUBSTRING(dt, 12, 8)
+            )
+        )
+	from i2b2metadata m 
+	CROSS APPLY (SELECT TRY_CAST(m.c_metadataxml AS xml)) CA(x)
+	CROSS APPLY (SELECT x.value('(/ValueMetadata/CreationDateTime/text())[1]', 'nvarchar(100)')) D(dt)
+	where m.C_FULLNAME like '%\I2B2MetaData\LabTests\%'
+	and m.c_metadataxml is not null
+	and m.c_metadataxml != ''
 GO
 -- Create the new views - change COVID_Mart to your DB name
 IF  EXISTS (SELECT * FROM sys.views WHERE name = N'i2o_ontology_lab') DROP VIEW i2o_ontology_lab
