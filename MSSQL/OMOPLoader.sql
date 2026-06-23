@@ -919,15 +919,47 @@ and c2.invalid_reason is null
 and c2.domain_id='Measurement';
 
 -- Add drugs from the ontology
--- Note: left joins to support non-standard codes (no mapping) in i2o-2020.
-insert into i2o_mapping(source_code, source_id,concept_id,domain_id)
-select distinct c1.concept_code source_code, c1.concept_id source_id, c2.concept_id,isnull(c2.domain_id,c1.domain_id)
-from i2o_ontology_drug d inner join concept c1 on (c1.concept_code=d.i_stdcode and (d.i_stddomain='RxNorm' or d.i_stddomain='NDC') and c1.domain_id='Drug')
-left join  concept_relationship cr   ON  c1.concept_id = cr.concept_id_1 and cr.relationship_id = 'Maps to'
-left join concept c2 ON c2.concept_id =cr.concept_id_2
-and c2.standard_concept ='S'
-and c2.invalid_reason is null
-and c2.domain_id='Drug';
+-- Update 6/2026: previously when multiple non-standard mappings existed, standard mapping was ignored.
+;with candidate_mappings as (
+    select distinct
+        c1.concept_code as source_code,
+        c1.concept_id as source_id,
+        c2.concept_id as concept_id,
+        isnull(c2.domain_id, c1.domain_id) as domain_id
+    from i2o_ontology_drug d
+    inner join concept c1
+        on c1.concept_code = d.i_stdcode
+       and (d.i_stddomain = 'RxNorm' or d.i_stddomain = 'NDC')
+       and c1.domain_id = 'Drug'
+    left join concept_relationship cr
+        on c1.concept_id = cr.concept_id_1
+       and cr.relationship_id = 'Maps to'
+    left join concept c2
+        on c2.concept_id = cr.concept_id_2
+       and c2.standard_concept = 'S'
+       and c2.invalid_reason is null
+       and c2.domain_id = 'Drug'
+),
+flagged_mappings as (
+    select
+        source_code,
+        source_id,
+        concept_id,
+        domain_id,
+        max(case when concept_id is not null then 1 else 0 end)
+            over (partition by source_code) as has_mapped_concept
+    from candidate_mappings
+)
+insert into i2o_mapping(source_code, source_id, concept_id, domain_id)
+select
+    source_code,
+    source_id,
+    concept_id,
+    domain_id
+from flagged_mappings
+where
+    concept_id is not null
+    or has_mapped_concept = 0;
 
 -- Index it
 CREATE NONCLUSTERED INDEX [i2omap_index]
