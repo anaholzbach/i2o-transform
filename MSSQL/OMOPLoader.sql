@@ -46,6 +46,7 @@ IF  EXISTS (SELECT * FROM sys.synonyms WHERE name = N'i2b2patient') DROP SYNONYM
 -------------------------------------------------------------------------------------------------------
 DECLARE @SQL nvarchar(4000)
 DECLARE @SCHEMA nvarchar(100)
+DECLARE @EthnicityColumns nvarchar(1000)
 
 BEGIN TRY
 	SET @SCHEMA = (SELECT tc.VALUE FROM i2o_transform_config tc where tc.[key] = 'i2b2mart.db.schema.')
@@ -55,7 +56,12 @@ BEGIN CATCH
 END CATCH
 IF NOT EXISTS (SELECT * FROM sys.views WHERE object_id = OBJECT_ID('i2b2patient'))
 	BEGIN TRY
-		SET @SQL = 'create view i2b2patient as select * from ' + @SCHEMA + N'patient_dimension where patient_num in (select patient_num from i2b2patient_list)'
+        -- NULL means the optional source column is absent: retain legacy ethnicity mapping.
+        SET @EthnicityColumns = N'cast(null as int) as i2o_ethnicity_concept_id, cast(null as varchar(50)) as i2o_ethnicity_source_value'
+        IF COL_LENGTH(@SCHEMA + N'patient_dimension', 'Ethnic_Group') IS NOT NULL
+            SET @EthnicityColumns = N'case when upper(ltrim(rtrim(Ethnic_Group))) = ''HISPANIC'' then 38003563 else 0 end as i2o_ethnicity_concept_id, convert(varchar(50), Ethnic_Group) as i2o_ethnicity_source_value'
+        -- Only generate a reference to Ethnic_Group when it exists in the source schema.
+        SET @SQL = N'create view i2b2patient as select *, ' + @EthnicityColumns + N' from ' + @SCHEMA + N'patient_dimension where patient_num in (select patient_num from i2b2patient_list)'
 		EXEC SP_EXECUTESQL @SQL
 	END TRY
 	BEGIN CATCH
@@ -548,20 +554,21 @@ GO
 IF  EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'OMOPdemographics') AND type in (N'P', N'PC')) DROP PROCEDURE OMOPdemographics
 go
 
-create procedure OMOPdemographics as 
+create procedure OMOPdemographics as
+-- The optional Ethnic_Group mapping overrides ethnicity only; NULL retains the legacy mapping.
 
 DECLARE @sqltext NVARCHAR(4000);
 DECLARE @batchid numeric
 declare getsql cursor local for 
 --1 --  S,R,NH
 	select 'insert into person(gender_source_value,race_source_value,ethnicity_source_value,person_id,year_of_birth,month_of_birth,day_of_birth,birth_datetime,gender_concept_id,ethnicity_concept_id,race_concept_id) '+ --person(raw_sex,PATID, BIRTH_DATE, BIRTH_TIME,SEX, HISPANIC, RACE) 
-	'	select p.sex_cd+'':'+sex.c_name+''',substring(p.race_cd+'':'+race.c_name+''', 1, 50),substring(p.race_cd+'':Unknown'', 1, 50),patient_num, '+
+	'	select p.sex_cd+'':'+sex.c_name+''',substring(p.race_cd+'':'+race.c_name+''', 1, 50),case when p.i2o_ethnicity_concept_id is not null then p.i2o_ethnicity_source_value else substring(p.race_cd+'':Unknown'', 1, 50) end,patient_num, '+
 	'	year(birth_date), '+
     '	month(birth_date), '+
     '	day(birth_date), '+
 	'	birth_date, '+ --Bug fix MJ 5/10/17
 	''''+sex.omop_basecode+''','+
-	'0,'+
+	'coalesce(p.i2o_ethnicity_concept_id, 0),' +
 	''''+race.omop_basecode+''''+
 	' from i2b2patient p '+
 	'	where lower(p.sex_cd) in ('+lower(sex.c_dimcode)+') '+
@@ -575,13 +582,13 @@ declare getsql cursor local for
 	and sex.c_visualattributes like 'L%'
 union -- A - S,R,H
 select 'insert into person(gender_source_value,race_source_value,ethnicity_source_value,person_id,year_of_birth,month_of_birth,day_of_birth,birth_datetime,gender_concept_id,ethnicity_concept_id,race_concept_id) '+
-	'	select p.sex_cd+'':'+sex.c_name+''',substring(p.race_cd+'':'+race.c_name+''', 1, 50), substring(p.race_cd+'':'+hisp.c_name+''', 1, 50),patient_num, '+ --'	select p.sex_cd+'':''+sex.c_name,p.race_cd+'':''+race.c_name,p.race_cd+'':''+hisp.c_name,patient_num, '+
+	'	select p.sex_cd+'':'+sex.c_name+''',substring(p.race_cd+'':'+race.c_name+''', 1, 50), case when p.i2o_ethnicity_concept_id is not null then p.i2o_ethnicity_source_value else substring(p.race_cd+'':'+hisp.c_name+''', 1, 50) end,patient_num, '+ --'	select p.sex_cd+'':''+sex.c_name,p.race_cd+'':''+race.c_name,p.race_cd+'':''+hisp.c_name,patient_num, '+
 	'	year(birth_date), '+
     '	month(birth_date), '+
     '	day(birth_date), '+
 	'	birth_date, '+ --Bug fix MJ 5/10/17
 	''''+sex.omop_basecode+''','+
-	''''+hisp.omop_basecode+''','+
+	'coalesce(p.i2o_ethnicity_concept_id, '''+hisp.omop_basecode+'''),' +
 	''''+race.omop_basecode+''''+
 	' from i2b2patient p '+
 	'	where lower(p.sex_cd) in ('+lower(sex.c_dimcode)+') '+
@@ -598,13 +605,13 @@ select 'insert into person(gender_source_value,race_source_value,ethnicity_sourc
 	and sex.c_visualattributes like 'L%'
 union --2 S, nR, nH
 	select 'insert into person(gender_source_value,race_source_value,ethnicity_source_value,person_id,year_of_birth,month_of_birth,day_of_birth,birth_datetime,gender_concept_id,ethnicity_concept_id,race_concept_id) '+
-	'	select p.sex_cd+'':'+sex.c_name+''',substring(p.race_cd+'':Unknown'', 1, 50), substring(p.race_cd+'':Unknown'', 1, 50),patient_num, '+ --'	select p.sex_cd,p.race_cd,p.race_cd,patient_num, '+
+	'	select p.sex_cd+'':'+sex.c_name+''',substring(p.race_cd+'':Unknown'', 1, 50), case when p.i2o_ethnicity_concept_id is not null then p.i2o_ethnicity_source_value else substring(p.race_cd+'':Unknown'', 1, 50) end,patient_num, '+ --'	select p.sex_cd,p.race_cd,p.race_cd,patient_num, '+
 	'	year(birth_date), '+
     '	month(birth_date), '+
     '	day(birth_date), '+
 	'	birth_date, '+ --Bug fix MJ 5/10/17
 	''''+sex.omop_basecode+''','+
-	'0,'+
+	'coalesce(p.i2o_ethnicity_concept_id, 0),' +
 	'0'+
 	' from i2b2patient p '+
 	'	where lower(isnull(p.sex_cd,''xx'')) in ('+lower(sex.c_dimcode)+') '+
@@ -616,13 +623,13 @@ union --2 S, nR, nH
 	and sex.c_visualattributes like 'L%'
 union --3 -- nS,R, NH
 	select 'insert into person(gender_source_value,race_source_value,ethnicity_source_value,person_id,year_of_birth,month_of_birth,day_of_birth,birth_datetime,gender_concept_id,ethnicity_concept_id,race_concept_id) '+
-	'	select p.sex_cd,substring(p.race_cd+'':'+race.c_name+''', 1, 50),substring(p.race_cd+'':Unknown'', 1, 50),patient_num, '+
+	'	select p.sex_cd,substring(p.race_cd+'':'+race.c_name+''', 1, 50),case when p.i2o_ethnicity_concept_id is not null then p.i2o_ethnicity_source_value else substring(p.race_cd+'':Unknown'', 1, 50) end,patient_num, '+
 	'	year(birth_date), '+
     '	month(birth_date), '+
     '	day(birth_date), '+
 	'	birth_date, '+ --Bug fix MJ 5/10/17
 	'0,'+
-	'0,'+
+	'coalesce(p.i2o_ethnicity_concept_id, 0),' +
 	''''+race.omop_basecode+''''+
 	' from i2b2patient p '+
 	'	where lower(isnull(p.sex_cd,''xx'')) not in (select lower(code) from omop_codelist where codetype=''SEX'') '+
@@ -634,13 +641,13 @@ union --3 -- nS,R, NH
 	and race.c_visualattributes like 'L%'
 union --B -- nS,R, H
 	select 'insert into person(gender_source_value,race_source_value,ethnicity_source_value,person_id,year_of_birth,month_of_birth,day_of_birth,birth_datetime,gender_concept_id,ethnicity_concept_id,race_concept_id) '+
-	'	select p.sex_cd,substring(p.race_cd+'':'+race.c_name+''', 1, 50),substring(p.race_cd+'':'+hisp.c_name+''', 1, 50),patient_num, '+
+	'	select p.sex_cd,substring(p.race_cd+'':'+race.c_name+''', 1, 50),case when p.i2o_ethnicity_concept_id is not null then p.i2o_ethnicity_source_value else substring(p.race_cd+'':'+hisp.c_name+''', 1, 50) end,patient_num, '+
 	'	year(birth_date), '+
     '	month(birth_date), '+
     '	day(birth_date), '+
 	'	birth_date, '+ --Bug fix MJ 5/10/17
 	'0,'+
-	''''+hisp.omop_basecode+''','+
+	'coalesce(p.i2o_ethnicity_concept_id, '''+hisp.omop_basecode+'''),' +
 	''''+race.omop_basecode+''''+
 	' from i2b2patient p '+
 	'	where lower(isnull(p.sex_cd,''xx'')) not in (select lower(code) from omop_codelist where codetype=''SEX'') '+
@@ -655,13 +662,13 @@ union --B -- nS,R, H
 	and hisp.c_visualattributes like 'L%'
 union --4 -- S, NR, H
 	select 'insert into person(gender_source_value,race_source_value,ethnicity_source_value,person_id,year_of_birth,month_of_birth,day_of_birth,birth_datetime,gender_concept_id,ethnicity_concept_id,race_concept_id) '+
-	'	select p.sex_cd+'':'+sex.c_name+''',substring(p.race_cd+'':Unknown'', 1, 50),substring(p.race_cd+'':Hispanic'', 1, 50),patient_num, '+
+	'	select p.sex_cd+'':'+sex.c_name+''',substring(p.race_cd+'':Unknown'', 1, 50),case when p.i2o_ethnicity_concept_id is not null then p.i2o_ethnicity_source_value else substring(p.race_cd+'':Hispanic'', 1, 50) end,patient_num, '+
 	'	year(birth_date), '+
     '	month(birth_date), '+
     '	day(birth_date), '+
 	'	birth_date, '+ --Bug fix MJ 5/10/17
 	''''+sex.omop_basecode+''','+
-	'38003563,'+
+	'coalesce(p.i2o_ethnicity_concept_id, 38003563),' +
 	'0'+
 	' from i2b2patient p '+
 	'	where lower(isnull(p.sex_cd,''NI'')) in ('+lower(sex.c_dimcode)+') '+
@@ -673,13 +680,13 @@ union --4 -- S, NR, H
 	and sex.c_visualattributes like 'L%'
 union --5 -- NS, NR, H
 	select 'insert into person(gender_source_value,race_source_value,ethnicity_source_value,person_id,year_of_birth,month_of_birth,day_of_birth,birth_datetime,gender_concept_id,ethnicity_concept_id,race_concept_id) '+
-	'	select p.sex_cd,substring(p.race_cd+'':Unknown'', 1, 50),substring(p.race_cd+'':Hispanic'', 1, 50),patient_num, '+
+	'	select p.sex_cd,substring(p.race_cd+'':Unknown'', 1, 50),case when p.i2o_ethnicity_concept_id is not null then p.i2o_ethnicity_source_value else substring(p.race_cd+'':Hispanic'', 1, 50) end,patient_num, '+
 	'	year(birth_date), '+
     '	month(birth_date), '+
     '	day(birth_date), '+
 	'	birth_date, '+ --Bug fix MJ 5/10/17
 	'0,'+
-	'38003563,'+
+	'coalesce(p.i2o_ethnicity_concept_id, 38003563),' +
 	'0'+
 	' from i2b2patient p '+
 	'	where lower(isnull(p.sex_cd,''xx'')) not in (select lower(code) from omop_codelist where codetype=''SEX'') '+
@@ -688,13 +695,13 @@ union --5 -- NS, NR, H
     '   and patient_num not in (select person_id from person)'  --bug fix MJ 3/19/18
 union --6 -- NS, NR, nH
 	select 'insert into person(gender_source_value,race_source_value,ethnicity_source_value,person_id,year_of_birth,month_of_birth,day_of_birth,birth_datetime,gender_concept_id,ethnicity_concept_id,race_concept_id) '+
-	'	select p.sex_cd,substring(p.race_cd+'':Unknown'', 1, 50),substring(p.race_cd+'':Unknown'', 1, 50),patient_num, '+
+	'	select p.sex_cd,substring(p.race_cd+'':Unknown'', 1, 50),case when p.i2o_ethnicity_concept_id is not null then p.i2o_ethnicity_source_value else substring(p.race_cd+'':Unknown'', 1, 50) end,patient_num, '+
 	'	year(birth_date), '+
     '	month(birth_date), '+
     '	day(birth_date), '+
 	'	birth_date, '+ --Bug fix MJ 5/10/17
 	'0,'+
-	'0,'+
+	'coalesce(p.i2o_ethnicity_concept_id, 0),' +
 	'0'+
     ' from i2b2patient p '+
 	'	where lower(isnull(p.sex_cd,''xx'')) not in (select lower(code) from omop_codelist where codetype=''SEX'') '+
