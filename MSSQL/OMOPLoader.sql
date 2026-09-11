@@ -2200,9 +2200,12 @@ RAISERROR('OMOPdemographics %s', 0, 1,@FLAG) WITH NOWAIT;
 exec OMOPcare_site
 set @FLAG=cast(getdate() as varchar(30))
 RAISERROR('OMOPcare_site %s', 0, 1,@FLAG) WITH NOWAIT;
-exec OMOPencounter
+exec GPI_islands_all
 set @FLAG=cast(getdate() as varchar(30))
-RAISERROR('OMOPencounter %s', 0, 1,@FLAG) WITH NOWAIT;
+RAISERROR('GPI_islands_all %s', 0, 1,@FLAG) WITH NOWAIT;
+exec OMOPencounter_islands
+set @FLAG=cast(getdate() as varchar(30))
+RAISERROR('OMOPencounter_islands %s', 0, 1,@FLAG) WITH NOWAIT;
 exec OMOPencounter_secondary
 set @FLAG=cast(getdate() as varchar(30))
 RAISERROR('OMOPencounter_secondary %s', 0, 1,@FLAG) WITH NOWAIT;
