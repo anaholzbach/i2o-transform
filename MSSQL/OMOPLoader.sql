@@ -909,9 +909,9 @@ EXEC('DROP TABLE #concept_map')
 -- New 04-20, no now builds i2o-mapping on the fly, which was needed for labs and drug exposure
 
 -- Add labs from the ontology
-select distinct c1.concept_code source_code, c1.concept_id source_id, convert(int, c2.concept_id) concept_id,convert(varchar(20),c2.domain_id) domain_id -- convert is to allow nulls
+select distinct c1.concept_code source_code, c1.vocabulary_id source_vocabulary_id, c1.concept_id source_id, convert(int, c2.concept_id) concept_id,convert(varchar(20),c2.domain_id) domain_id -- convert is to allow nulls
 into i2o_mapping
-from i2o_ontology_lab d inner join concept c1 on (c1.concept_code=d.i_stdcode and d.i_stddomain='LOINC' and c1.domain_id='Measurement')
+from i2o_ontology_lab d inner join concept c1 on (c1.concept_code=d.i_stdcode and d.i_stddomain='LOINC' and c1.vocabulary_id=d.i_stddomain and c1.domain_id='Measurement')
 inner join  concept_relationship cr   ON  c1.concept_id = cr.concept_id_1 and cr.relationship_id = 'Maps to'
 inner join concept c2 ON c2.concept_id =cr.concept_id_2
 and c2.standard_concept ='S'
@@ -923,6 +923,7 @@ and c2.domain_id='Measurement';
 ;with candidate_mappings as (
     select distinct
         c1.concept_code as source_code,
+        c1.vocabulary_id as source_vocabulary_id,
         c1.concept_id as source_id,
         c2.concept_id as concept_id,
         isnull(c2.domain_id, c1.domain_id) as domain_id
@@ -930,6 +931,8 @@ and c2.domain_id='Measurement';
     inner join concept c1
         on c1.concept_code = d.i_stdcode
        and (d.i_stddomain = 'RxNorm' or d.i_stddomain = 'NDC')
+       -- Concept codes are only unique within their source vocabulary.
+       and c1.vocabulary_id = d.i_stddomain
        and c1.domain_id = 'Drug'
     left join concept_relationship cr
         on c1.concept_id = cr.concept_id_1
@@ -943,16 +946,18 @@ and c2.domain_id='Measurement';
 flagged_mappings as (
     select
         source_code,
+        source_vocabulary_id,
         source_id,
         concept_id,
         domain_id,
         max(case when concept_id is not null then 1 else 0 end)
-            over (partition by source_code) as has_mapped_concept
+            over (partition by source_code, source_vocabulary_id, source_id) as has_mapped_concept
     from candidate_mappings
 )
-insert into i2o_mapping(source_code, source_id, concept_id, domain_id)
+insert into i2o_mapping(source_code, source_vocabulary_id, source_id, concept_id, domain_id)
 select
     source_code,
+    source_vocabulary_id,
     source_id,
     concept_id,
     domain_id
@@ -963,7 +968,7 @@ where
 
 -- Index it
 CREATE NONCLUSTERED INDEX [i2omap_index]
-	ON [dbo].[i2o_mapping]([source_code]);
+	ON [dbo].[i2o_mapping]([source_code], [source_vocabulary_id]);
 
 end
 go
@@ -1666,7 +1671,7 @@ select distinct m.patient_num
  inner join pcornet_med mo on m.concept_cd = mo.c_basecode 
  inner join visit_occurrence enc on enc.person_id = m.patient_num and enc.visit_occurrence_id = m.encounter_Num 
 -- Note the only reason we need i2o_mapping is to figure which are standard codes, sourcecode already comes from RxCui
- left join i2o_mapping omap on mo.i_stdcode=omap.source_code and omap.domain_id='Drug'
+ left join i2o_mapping omap on mo.i_stdcode=omap.source_code and mo.i_stddomain=omap.source_vocabulary_id and omap.domain_id='Drug'
  left outer join provider p on p.provider_source_value = m.provider_id
 
 -- TODO: This join adds several minutes to the load - must be debugged
@@ -2065,7 +2070,7 @@ isnull(omap.source_id, '0') measurement_source_concept_id,
 FROM i2b2fact M  
 inner join visit_occurrence enc on enc.person_id = m.patient_num and enc.visit_occurrence_id = m.encounter_Num -- Constraint to selected encounters
 inner join (select distinct i_stdcode,c_basecode, i_unit from i2o_ontology_lab where i_stddomain='LOINC') lab on lab.c_basecode  = M.concept_cd
-inner join i2o_mapping omap on lab.i_stdcode=omap.source_code and omap.domain_id='Measurement'
+inner join i2o_mapping omap on lab.i_stdcode=omap.source_code and omap.source_vocabulary_id='LOINC' and omap.domain_id='Measurement'
 -- NOTE: Both m.units_cd (original observation fact unit value) and m.i_unit (extract unit value from PHS XML) are mapped to UCUM standard concepts
 left outer join i2o_unitsmap u on u.units_name=m.units_cd
 left outer join i2o_unitsmap u2 on u2.units_name=lab.i_unit
