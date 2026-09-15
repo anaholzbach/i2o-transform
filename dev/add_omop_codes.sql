@@ -13,8 +13,8 @@ update concept set invalid_reason=null where invalid_reason=''
 update d set omop_sourcecode=concept_id
 from pcornet_diag d inner join PMI..concept as c
 on concept_code=substring(pcori_basecode,charindex(':',pcori_basecode)+1,200) -- jgk 1/15/18: old ontologies had ICD9: in pcori_basecode and it needs to be stripped
+and c.vocabulary_id=case dbo.stringpart(c_fullname,'\',2) when '09' THEN 'ICD9CM' when '10' THEN 'ICD10CM' END
 where 
---c.vocabulary_id in ('ICD9CM', 'ICD10CM') and  -- include all vocabs
 --c.invalid_reason IS NULL and -- commented out to include deprecated
 c.domain_id='Condition'
 
@@ -48,6 +48,8 @@ GO
 update p set omop_sourcecode=concept_id
 from pcornet_proc p inner join PMI..concept as c
 on concept_code=substring(pcori_basecode,charindex(':',pcori_basecode)+1,100)
+and c.vocabulary_id=case dbo.stringpart(c_fullname,'\',2) when '09' THEN 'ICD9Proc' when '10' THEN 'ICD10PCS' WHEN 'CH' THEN
+ case dbo.stringpart(c_fullname,'\',3) when 'HC' THEN 'HCPCS' ELSE 'CPT4' END END
 where 
 c.domain_id='Procedure' 
 
@@ -73,7 +75,7 @@ and c2.domain_id='Procedure'
 -- Add source code for lab 
 update p set omop_sourcecode=concept_id
 from pcornet_lab p inner join concept as c
-on concept_code=pcori_basecode
+on concept_code=pcori_basecode and c.vocabulary_id='LOINC'
 where 
 c.domain_id='Measurement'
 
@@ -105,14 +107,14 @@ Go
 -- Now, vitals! These all map to standard codes so we don't use the omop_mapping table
 update p set omop_sourcecode=concept_id
 from pcornet_vital p inner join concept as c
-on concept_code=p.i_loinc
+on concept_code=p.i_loinc and c.vocabulary_id='LOINC'
 where 
 c.domain_id='Measurement'
 
 -- Add source code for drug expose
 update p set omop_sourcecode=concept_id
 from pcornet_med p inner join concept as c
-on concept_code=pcori_cui
+on concept_code=pcori_cui and c.vocabulary_id='RxNorm'
 where 
 c.domain_id='Drug'
 
@@ -135,6 +137,8 @@ GO
 update p set omop_sourcecode=concept_id,omop_targettable=domain_id
 from pcornet_proc p inner join concept as c
 on concept_code=substring(pcori_basecode,charindex(':',pcori_basecode)+1,100)
+and c.vocabulary_id=case dbo.stringpart(c_fullname,'\',2) when '09' THEN 'ICD9Proc' when '10' THEN 'ICD10PCS' WHEN 'CH' THEN
+ case dbo.stringpart(c_fullname,'\',3) when 'HC' THEN 'HCPCS' ELSE 'CPT4' END END
 where 
 vocabulary_id in ('CPT4','HCPCS') and c.domain_id!='Procedure'
 GO

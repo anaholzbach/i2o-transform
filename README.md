@@ -60,6 +60,20 @@ This transforms i2b2 data into OMOP according to the [AllOfUs OMOP CDM Table Req
 ### Each time you want to transform your data:
 1. From your OMOP database, execute the run script in the [MSSQL directory of our GitHub](https://github.com/ARCH-commons/i2o-transform/tree/master/MSSQL) to transform your data. You can skip the OMOPPrep line if your i2b2 data has not changed since the last run.
 
+### Optional patient ethnicity field
+
+If the configured source `patient_dimension` has an `Ethnic_Group` column, demographics uses it for ethnicity. `HISPANIC` (case-insensitive, ignoring surrounding spaces) maps to concept `38003563`. All other values, including NULL and blank, map to `0` (unknown); they do not fall back to race-based ethnicity or imply "not Hispanic." The original field value is retained in `ethnicity_source_value`, limited to 50 characters. Race and sex mappings are unchanged.
+
+If the column is absent, the existing ontology/`race_cd` ethnicity mapping is retained. Column availability is checked when the loader creates `i2b2patient`; its derived ethnicity fields distinguish an absent column from an empty value. Deploy the updated view together with `OMOPdemographics`, and recreate the view if the source column is later added or removed. The setup account must be able to see the source table's column metadata. Existing `person` rows are not updated by rerunning demographics; the new mapping applies when those rows are reloaded through the normal transform workflow.
+
+Demographics regression tests run with `python3 -B -m unittest discover -s tests`. They execute the generated UNION queries against synthetic source schemas with and without the optional column. SQLite syntax adaptations are used; SQL Server metadata detection and procedure compilation need integration validation on SQL Server.
+
+### Updating vocabulary mappings
+
+After installing changes to `OMOPBuildMapping`, rebuild `i2o_mapping` before running the lab or medication transforms. Running the complete `MSSQL/OMOPLoader.sql` script does this automatically. If deploying procedures individually, also update `OMOPdrug_exposure` and `OMOPmeasurementLab` and execute `OMOPBuildMapping`: the mapping table now includes `source_vocabulary_id` to keep same-code entries from different vocabularies separate.
+
+Vocabulary collision regression checks can be run with `python3 -B -m unittest discover -s tests`. These exercise the production lab/drug mapping queries with synthetic data in SQLite, adapting SQL Server syntax; SQL Server integration testing is still required for deployment validation.
+
 ### Other components in this repository:
 - *dev*: This contains the mapping code to generate the terminology mappings contained in our ontology and in the i2o-mapping table.
 - *PHS_MRN_PID_mapping*: Partners-specific code for managing HealthPro participant ids.
