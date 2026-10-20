@@ -59,7 +59,10 @@ IF NOT EXISTS (SELECT * FROM sys.views WHERE object_id = OBJECT_ID('i2b2patient'
         -- NULL means the optional source column is absent: retain legacy ethnicity mapping.
         SET @EthnicityColumns = N'cast(null as int) as i2o_ethnicity_concept_id, cast(null as varchar(50)) as i2o_ethnicity_source_value'
         IF COL_LENGTH(@SCHEMA + N'patient_dimension', 'Ethnic_Group') IS NOT NULL
-            SET @EthnicityColumns = N'case when upper(ltrim(rtrim(Ethnic_Group))) = ''HISPANIC'' then 38003563 else 0 end as i2o_ethnicity_concept_id, convert(varchar(50), Ethnic_Group) as i2o_ethnicity_source_value'
+            SET @EthnicityColumns = N'case when upper(ltrim(rtrim(Ethnic_Group))) = ''HISPANIC'' then 38003563 
+            when upper(Ethnic_Group) like ''%NON%'' and upper(Ethnic_Group) like ''%HISPANIC%'' then 38003564
+            else 0 end as i2o_ethnicity_concept_id, 
+            convert(varchar(50), Ethnic_Group) as i2o_ethnicity_source_value'
         -- Only generate a reference to Ethnic_Group when it exists in the source schema.
         SET @SQL = N'create view i2b2patient as select *, ' + @EthnicityColumns + N' from ' + @SCHEMA + N'patient_dimension where patient_num in (select patient_num from i2b2patient_list)'
 		EXEC SP_EXECUTESQL @SQL
