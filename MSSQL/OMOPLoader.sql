@@ -2055,7 +2055,10 @@ cast(m.start_Date as datetime) measurement_datetime,
 --     NVal for 3 covid antibody/antigens are low < 1
 --     NVal for 3 covid antibody/antigens are hight > 1
 case when m.valtype_cd = 'T' then 
-	isnull(concept.concept_id, local_concept_map.standard_concept_id) 
+	case when m.TVAL_CHAR like '%CANCELED%' OR m.TVAL_CHAR like '%CANCELLED%' OR m.TVAL_CHAR like '%CREDITED%' then '45878602'
+		when  m.TVAL_CHAR like '%UNSATISFACTORY%' then '46237613'
+		else isnull(concept.concept_id, local_concept_map.standard_concept_id)
+ 	end 
 	when (m.valtype_cd = 'N' and omap.concept_id in ('706178', '706177', '586522') and m.NVAL_NUM <= 1.0) then '45880296'
 	when (m.valtype_cd = 'N' and omap.concept_id in ('706178', '706177', '586522') and m.NVAL_NUM > 1.0) then '45877985'
 	else null end value_as_concept_id,
